@@ -81,7 +81,7 @@ class VJEPA2AttentivePoolerMasked(nn.Module): # neural network module
         # below, the model learns a pooling function that can focus on the most relevant sequence elements (rather than avg/max pooling)
         # because the pooling operation itself is trainable
         queries = self.query_tokens.repeat(hidden_state.shape[0], 1, 1)
-        hidden_state = self.cross_attention_layer(queries, hidden_state)[0]
+        hidden_state = self.cross_attention_layer(queries, hidden_state, attention_mask=attention_mask)[0]
         return hidden_state.squeeze(1)
 
 from data_augmentation import apply_tube_masks, apply_frame_drop, apply_frame_drop_2
@@ -396,8 +396,23 @@ class CustomVideoDataset(Dataset):
             # frames), not individual frames -- keeps each tubelet's internal frame
             # pairing intact and only permutes when each 2-frame chunk occurs in time.
             # Same permutation applied to the mask so padded positions stay correctly flagged.
+            #
+            # Only the REAL (non-padded) tubelets are permuted among themselves; padding
+            # tubelets are left at their original (always-leading) slots. The encoder
+            # itself is never given a padding mask (see forward()), so it self-attends
+            # over the whole clip including padding -- if padding were shuffled along
+            # with real content, the experiment would conflate "does frame order matter"
+            # with "does moving padding out of its training-time position matter",
+            # since training/baseline eval always keeps padding contiguous at the start.
             if self.encoder_config.get("shuffle_frames", False):
-                perm = torch.randperm(tubelets)
+                if self.encoder_config["model_name"].startswith("x3d"):
+                    real_tubelet_mask = mask.view(tubelets, self.tubelet_size).any(dim=1)
+                else:
+                    real_tubelet_mask = mask.view(tubelets, patches).any(dim=1)
+                real_idx = real_tubelet_mask.nonzero(as_tuple=True)[0]
+                perm = torch.arange(tubelets)
+                perm[real_idx] = real_idx[torch.randperm(len(real_idx))]
+
                 video_frames = video_frames.view(
                     tubelets, self.tubelet_size, *video_frames.shape[1:]
                 )[perm].reshape(video_frames.shape[0], *video_frames.shape[1:])

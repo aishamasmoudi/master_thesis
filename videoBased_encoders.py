@@ -301,7 +301,7 @@ class VJEPA2AttentivePoolerMasked(nn.Module):
         for layer in self.self_attention_layers:
             hidden_state = layer(hidden_state, attention_mask=attention_mask)[0]
         queries = self.query_tokens.repeat(hidden_state.shape[0], 1, 1)
-        hidden_state = self.cross_attention_layer(queries, hidden_state)[0]
+        hidden_state = self.cross_attention_layer(queries, hidden_state, attention_mask=attention_mask)[0]
         return hidden_state.squeeze(1)
 
 class VideoEncoder_ForHumanSensoryHistoryReports(VJEPA2PreTrainedModel):

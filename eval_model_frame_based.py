@@ -80,7 +80,7 @@ class VJEPA2AttentivePoolerMasked(nn.Module): # neural network module
         # below, the model learns a pooling function that can focus on the most relevant sequence elements (rather than avg/max pooling)
         # because the pooling operation itself is trainable
         queries = self.query_tokens.repeat(hidden_state.shape[0], 1, 1)
-        hidden_state = self.cross_attention_layer(queries, hidden_state)[0]
+        hidden_state = self.cross_attention_layer(queries, hidden_state, attention_mask=attention_mask)[0]
         return hidden_state.squeeze(1)
 
 from data_augmentation import apply_tube_masks, apply_frame_drop, apply_frame_drop_2
