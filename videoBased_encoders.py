@@ -341,8 +341,30 @@ class VideoEncoder_ForHumanSensoryHistoryReports(VJEPA2PreTrainedModel):
             outputs = self.encoder(pixel_values_videos=pixel_values_videos, output_hidden_states=True)
             last_hidden_states = outputs.last_hidden_state
         elif self.model_name.startswith("videomae"):
+            # VideoMAE has fixed-length learned position embeddings (unlike vjepa2's
+            # RoPE), so it can only ever be called on exactly the frame count it was
+            # pretrained on (16). Longer clips are covered by chopping into
+            # `max_segments` 16-frame segments (see CustomVideoDataset), each encoded
+            # independently, then concatenated into one long token sequence per video
+            # before pooling -- mirrors the frame-based branch's per-frame encode +
+            # flatten pattern, just at segment granularity instead of per-frame.
+            #
+            # pixel_values_videos arrives as (batch_size * max_segments, T, C, H, W),
+            # segments for a given video contiguous in that order (built via
+            # torch.cat in train_ddp/eval_ddp), so a single batched encoder call
+            # followed by a reshape recovers "one video's tokens = its segments'
+            # token sequences concatenated in order" with no explicit Python loop.
+            max_segments = self.encoder_config["max_segments"]
+            total_segments = pixel_values_videos.shape[0]
+            batch_size = total_segments // max_segments
+
             outputs = self.encoder(pixel_values=pixel_values_videos)
-            last_hidden_states = outputs.last_hidden_state
+            last_hidden_states = outputs.last_hidden_state  # (batch*max_segments, tokens_per_segment, hidden)
+            hidden_size = last_hidden_states.shape[-1]
+            last_hidden_states = last_hidden_states.reshape(batch_size, -1, hidden_size)
+
+            # context_masks: (batch*max_segments, tubelets*patches) -> (batch, max_segments*tubelets*patches)
+            context_masks = context_masks.reshape(batch_size, -1)
         elif self.model_name.startswith("videomamba"):
             # VideoMambaFeatureExtractor.forward returns the raw patch-token
             # tensor [B, L, C] directly (no HF-style output object, no CLS)
@@ -476,6 +498,21 @@ class CustomVideoDataset(Dataset):
                 video_frames = torch.cat([padding, video_frames], dim=0)
 
             clips.append(video_frames)
+
+        # Pad the SEGMENT COUNT itself up to max_segments (not just within-segment
+        # frames, handled above) -- needed when a video is short enough that
+        # generate_segments() returns fewer than max_segments real segments (e.g.
+        # videomae's 16-frame segments covering a long clip). Prepended, so real
+        # content stays at the end of the sequence, same "padding precedes real
+        # content" convention used for within-segment frame padding. No-op for every
+        # other model, since they all use max_segments=1 and generate_segments()
+        # always returns at least 1 segment.
+        n_pad_segments = self.max_segments - len(clips)
+        if n_pad_segments > 0:
+            fake_clip = self.fill_value * torch.ones_like(clips[0])
+            fake_mask = torch.zeros_like(masks[0])
+            clips = [fake_clip] * n_pad_segments + clips
+            masks = [fake_mask] * n_pad_segments + masks
 
         # Stack clips (num_segments, T, C, H, W)
         clips = torch.stack(clips, dim=0)
@@ -680,9 +717,21 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
 
         train_df = pd.concat([train_df, additional_trials], ignore_index=True)
 
-    # Only include short videos for fitting to avoid an overreliance on the context
-    train_df = train_df.loc[train_df['videoDuration (sec)'] <= np.max([frames/fps, 0.5])]
-    val_df = val_df.loc[val_df['videoDuration (sec)'] <= np.max([frames/fps, 0.5])]
+    # VideoMAE has a hard 16-frame-per-call limit (fixed-length learned position
+    # embeddings, unlike vjepa2's RoPE), so it covers longer clips via multiple
+    # 16-frame segments concatenated before pooling (see CustomVideoDataset /
+    # VideoEncoder_ForHumanSensoryHistoryReports.forward) instead of one big
+    # frames_per_clip like vjepa2. max_segments_per_video=4 (4 x 16 = 64 frames
+    # @ 4fps ~= 16s) covers the same ~15s duration cap the other full-clip models
+    # use, instead of restricting training to <=4s videos.
+    max_segments_per_video = 4 if model_name.startswith("videomae") else 1
+
+    # Only include videos that fit within the total frame budget across all
+    # segments (frames_per_clip * max_segments_per_video), to avoid an
+    # overreliance on context beyond what the model actually gets to see.
+    duration_cap_frames = frames * max_segments_per_video
+    train_df = train_df.loc[train_df['videoDuration (sec)'] <= np.max([duration_cap_frames/fps, 0.5])]
+    val_df = val_df.loc[val_df['videoDuration (sec)'] <= np.max([duration_cap_frames/fps, 0.5])]
 
     # if debug:
     #     train_df = train_df.sample(n=128, replace=False, random_state=42)
@@ -707,7 +756,6 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
     # Create datasets with decoding in workers
     # Create data loaders with distributed samplers
     num_workers = 4#4  # 4#2  # Reduced for stability
-    max_segments_per_video = 1
     prefetch_factor = 2  # 4qq
     sampling = 30 // fps  # videos were encoded at 30fps, we're sampling at 5Hz, thus every 200ms
     frames_per_clip = frames  # 40#2#config.frames_per_clip  # this is 64, thus 12.8s (64 x 0.2s) maximum video duration.
@@ -717,6 +765,9 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
     tubelet_size = encoder_config["tubelet_size"]
     added_tokens = encoder_config["added_tokens"]
     patch_size = encoder_config["patch_size"]
+    # Read by VideoEncoder_ForHumanSensoryHistoryReports.forward's videomae branch
+    # to reshape the flat (batch*max_segments, ...) tensors back per-video.
+    encoder_config["max_segments"] = max_segments_per_video
 
     train_ds = CustomVideoDataset(
         train_video_file_paths.tolist(),
@@ -1144,7 +1195,8 @@ def eval_ddp(rank, world_size, model_name, result_dir, experiment_id, frames, da
     seq_labels = seq_df[categories].values
 
     num_workers = 4  # 4  # 4#2  # Reduced for stability
-    max_segments_per_video = 1
+    # See train_ddp for why videomae needs multiple 16-frame segments per video.
+    max_segments_per_video = 4 if model_name.startswith("videomae") else 1
     prefetch_factor = 2  # 4qq
     sampling = 30 // fps  # videos were encoded at 30fps, we're sampling at 5Hz, thus every 200ms
     frames_per_clip = frames  # 40#2#config.frames_per_clip  # this is 64, thus 12.8s (64 x 0.2s) maximum video duration.
@@ -1154,6 +1206,7 @@ def eval_ddp(rank, world_size, model_name, result_dir, experiment_id, frames, da
     tubelet_size = encoder_config["tubelet_size"]
     added_tokens = encoder_config["added_tokens"]
     patch_size = encoder_config["patch_size"]
+    encoder_config["max_segments"] = max_segments_per_video
 
     vis_ds = CustomVideoDataset(
         vis_video_file_paths.tolist(),
