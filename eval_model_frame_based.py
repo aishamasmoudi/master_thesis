@@ -501,7 +501,7 @@ world_size = torch.cuda.device_count()
 # mp.spawn in frameBased_encoders.py. Calling it once by hand with rank=0 while
 # world_size=4 will hang forever waiting for ranks 1-3 to also call it.
 # CHANGE ENGAING/BRAINTREE
-hypothesis = "h1_exp6"
+hypothesis = "v2_ordered"
 model_name = "dino_v2"
 approach = "baseline"
 model_ID = 'facebook/dinov2-large-imagenet1k-1-layer'
@@ -509,7 +509,7 @@ checkpoint_path = f"/braintree/home/aicha/Ego4D/model_eval/checkpoitns/dino_v2_l
 base_dir = "/braintree/data2/active/users/aicha/Ego4D_data"
 one_frame = False
 low_dynamicity_only = False
-shuffle_frames = True 
+shuffle_frames = False 
 #base_dir = "/home/aicha/orcd/pool/Ego4D_data"
 #result_dir = f'/orcd/data/dicarlo/001/om/lynnka/{model_name}_{approach}_aicha'
 #if not os.path.exists(result_dir):

@@ -458,14 +458,14 @@ world_size = torch.cuda.device_count()
 # mp.spawn in frameBased_encoders.py. Calling it once by hand with rank=0 while
 # world_size=4 will hang forever waiting for ranks 1-3 to also call it.
 # CHANGE ENGAING/BRAINTREE
-hypothesis = "h1_shuffled"
+hypothesis = "v2_ordered"
 model_name = "vjepa2"
 approach = "baseline"
 model_ID = "facebook/vjepa2-vitl-fpc64-256"
 checkpoint_path = f"/braintree/home/aicha/Ego4D/model_eval/checkpoitns/vjepa2/checkpoint_final.pt"
 base_dir = "/braintree/data2/active/users/aicha/Ego4D_data"
 low_dynamicity_only = False
-shuffle_frames = True
+shuffle_frames = False
 n_permutations = 10  # number of independent random shuffles to average over
 n_permutations = n_permutations if shuffle_frames else 1
 one_frame = False
