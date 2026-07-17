@@ -212,13 +212,51 @@ masking (`apply_tube_mask(s)`, contiguous rectangular spatial blocks zeroed acro
 from frames not already zeroed by padding). These operate on the `(num_segments, T*patches_per_frame)`
 attention mask, leaving `clips` pixel data untouched, so the attention pooler ignores masked positions.
 
+### Multi-segment models (VideoMAE, X3D)
+Unlike V-JEPA2 (RoPE generalizes to any clip length, so it takes one big `frames_per_clip=60` window) or
+DINOv2 (no cross-frame attention, so per-frame independence doesn't care about clip length), VideoMAE and
+X3D each have a **hard, fixed per-call frame budget**: VideoMAE uses fixed-length learned position
+embeddings (can only ever be called with exactly 16 frames — HF's `VJEPA2Embeddings`-style duplication
+kicks in for fewer, and more would just be a shape mismatch); X3D is a 3D CNN whose spatial stages and
+`hidden_size` are tied to a specific input size per variant (13 frames for `x3d_s`, 16 for `x3d_m`/`x3d_l`).
+Originally this meant `train_df`/`val_df` got filtered to clips no longer than one segment (e.g. ≤4s for a
+16-frame segment at 4fps) — starving these models of most of the dataset. Fixed by chopping longer clips
+into multiple `frames_per_clip`-sized segments instead of discarding the rest:
+
+- `max_segments_per_video = ceil(60 / frames_per_clip)` (in both `train_ddp` and `eval_ddp`) — enough
+  segments to cover the same ~15s duration cap the other full-clip models get (60 frames @ 4fps), instead
+  of just one segment. `frames` unaffected models still get `max_segments_per_video=1` (a no-op — this
+  computation only kicks in for `model_name.startswith("videomae")` or `.startswith("x3d")`).
+- `CustomVideoDataset.__getitem__` pads the *segment count* itself up to `max_segments` with fully-fake
+  padding segments (constant-value frames, all-invalid mask) when a video is short enough that
+  `generate_segments()` returns fewer real segments than that — prepended, so real content stays at the
+  end, matching the existing within-segment padding convention. This is generic (keyed off `self.max_segments`
+  vs. however many real segments came back), so it needed no VideoMAE/X3D-specific code and works for
+  whichever per-model mask convention the segment loop already built (VideoMAE: token-granularity mask via
+  the default branch; X3D: frame-granularity mask via its own branch, see below).
+- The forward pass (`VideoEncoder_ForHumanSensoryHistoryReports.forward`) receives
+  `pixel_values_videos` as `(batch_size * max_segments, T, C, H, W)`, with a given video's segments always
+  contiguous in that order (guaranteed by `torch.cat` in `train_ddp`/`eval_ddp`). One batched encoder call
+  + a `.reshape(batch_size, -1, hidden_size)` recovers "each video's tokens = its segments' token
+  sequences concatenated in order," with no explicit Python loop — same trick as the frame-based branch's
+  per-frame loop, just at segment granularity and without the loop (VideoMAE's/X3D's encoder call is
+  itself already a single batched call, unlike DINOv2's per-video `[self.encoder(...) for v in ...]`).
+  X3D's branch does this too, but has to run its existing frame→token mask expansion
+  (`unsqueeze`/`expand`/`reshape`) *before* the final per-video reshape, since that expansion assumes a
+  per-segment mask shape `(batch*max_segments, frames_per_clip)`.
+- `encoder_config["max_segments"]` is set unconditionally in `train_ddp`/`eval_ddp` right after
+  `get_encoder()` so the forward pass knows the reshape factor regardless of model.
+- Status: VideoMAE segment-chopping is implemented and **confirmed working** (user-tested). X3D
+  segment-chopping is implemented (mirrors VideoMAE exactly, mechanically verified — syntax/shape logic
+  checked, not yet run on the cluster).
+
 ### Encoder registry
 Frame-based encoders (`frameBased_encoders.py`): DINOv2 (small/base/large/giant, incl. "robust" variants),
 DINOv3, ResNet-50 (incl. adversarially-trained `eps*` checkpoints), AlexNet, ViT, ViT-large, I-JEPA,
 SigLIP2, ConvNeXt/ConvNeXt-V2 (multiple sizes).
-Video-based encoders (`videoBased_encoders.py`): V-JEPA2, X3D (s/m/l), VideoMAE (base/large), VideoMamba
-(middle, via external `VideoMamba` repo + HF hub checkpoint download — currently broken, see "Project
-overview").
+Video-based encoders (`videoBased_encoders.py`): V-JEPA2, X3D (s/m/l, now covers the full duration range —
+see "Multi-segment models" above), VideoMAE (base/large, same), VideoMamba (middle, via external
+`VideoMamba` repo + HF hub checkpoint download — currently broken, see "Project overview").
 
 ## Evaluation notebook (`evaluation_plots_clean.ipynb`)
 
@@ -267,21 +305,58 @@ A from-scratch, deliberately minimal replacement for the "Prediction Error vs. V
   column-wise) rather than re-bootstrapping — this reuses the paired-resample property above for a
   mathematically correct paired difference at zero extra cost.
 
+## Thesis writing & presentation materials (`writing/`)
+Not code — but treat as load-bearing context, since it's the source of truth for what's actually been
+done vs. planned, and future sessions will likely be asked to keep it in sync with the codebase.
+
+- `MAIN WRITING.docx`, `PART 1 - Dynamicity.docx`, `PART 1 - ENCODERS.docx`,
+  `PART 1 - Further optimization.docx`, `PART 1 - embedding.docx`, `PART 2.docx`,
+  `Models to run .pdf` — the user's own project documentation and a live model-training status tracker.
+  **Explicitly flagged by the user as not fully up to date** — some documented plans (curriculum learning,
+  composite dynamicity scores, H2/H3 experiments) were designed but never executed; don't assume something
+  documented here was actually done without checking the code/results or asking. Read with `textutil
+  -convert txt -stdout <file>` (macOS) since there's no native .docx reader tool.
+- `PRESENTATION PLAN.md` — slide-by-slide plan for the thesis presentation, built from the docs above plus
+  this session's findings, with an explicit `[HAVE]`/`[PENDING]`/`[CUT]` legend. Calibrated directly with
+  the user across several rounds (corrected threshold values, the frame-dropping story, which bugs are
+  presentable given the revert above, added benchmark-suite/visualization sections). Keep this in sync if
+  new results land or the story changes.
+- `PLOT CHECKLIST.md` — every plot referenced by the plan/deck, one line each, so the user can check off
+  what's built vs. still needs running before the talk.
+- `Master Thesis Presentation - DRAFT.pptx` — a first-draft slide deck built programmatically with
+  `python-pptx`, reusing the theme/masters/layouts from the user's own prior presentation
+  (`Presentation PDS.pptx`, the official EPFL template — colors/fonts extracted from `theme1.xml`, not
+  hand-guessed) so it matches her established visual style. Slides needing a plot the user hasn't produced
+  yet have a dashed-border placeholder box with `[ PLOT: <description> ]` instead of a real chart. To
+  rebuild/extend: `pip install python-pptx`, copy the template file fresh (`cp "Presentation PDS.pptx"
+  "<new name>.pptx"`), then script slide construction with `pptx.Presentation` — deleting all existing
+  slides via `prs.slides._sldIdLst` + `prs.part.drop_rel(rId)` before adding new ones is what keeps the
+  file small (old embedded media gets garbage-collected on save once nothing references it; going from
+  ~70MB to ~100KB in this session). No LibreOffice/PowerPoint available in this environment to render a
+  visual preview — verify shape positions stay within the slide bounds (10in × 5.62in here) programmatically,
+  and have the user open it in PowerPoint to sanity-check spacing before trusting it fully.
+
 ## Known issues
 
-### Fixed this session
-1. **`VJEPA2AttentivePoolerMasked.forward` never masked its final cross-attention step** (all four files:
-   `frameBased_encoders.py`, `videoBased_encoders.py`, `eval_model_frame_based.py`,
-   `eval_model_video_based.py`). The self-attention refinement layers correctly received `attention_mask`,
-   but `self.cross_attention_layer(queries, hidden_state)` — the call that actually produces the pooled
-   vector — never passed it through, even though `VJEPA2PoolerCrossAttentionLayer.forward` (confirmed from
-   the actual `transformers` source) accepts and correctly uses it. Net effect: padding tokens leaked
-   unmasked into every prediction for any clip needing padding (most of them). Fixed by adding
-   `attention_mask=attention_mask` to that call in all four files. **Any checkpoint trained before this fix
-   is now train/inference-mismatched** — the pooler's weights were optimized under the old, unmasked
-   behavior, so old checkpoints need retraining (cheap: only the pooler+classifier head is trainable, the
-   backbone stays frozen either way) before their predictions are trustworthy again.
-2. **Video-based tubelet-shuffle experiment scrambled padding-tubelet position, not just real-content
+### Found, fixed, then deliberately reverted — do not silently re-apply
+**`VJEPA2AttentivePoolerMasked.forward` never masks its final cross-attention step** (all four files:
+`frameBased_encoders.py`, `videoBased_encoders.py`, `eval_model_frame_based.py`,
+`eval_model_video_based.py`). The self-attention refinement layers correctly receive `attention_mask`, but
+`self.cross_attention_layer(queries, hidden_state)` — the call that actually produces the pooled vector —
+never passes it through, even though `VJEPA2PoolerCrossAttentionLayer.forward` (confirmed from the actual
+`transformers` source) accepts and correctly uses it. Net effect: padding tokens leak unmasked into every
+prediction for any clip needing padding (most of them). **This was fixed earlier in the project (adding
+`attention_mask=attention_mask` to that call), then explicitly reverted back to the original unmasked
+behavior at the user's request**, because every existing trained checkpoint was trained under the old
+(unmasked) behavior — fixing it without retraining creates a train/inference mismatch, and there wasn't
+time to retrain everything before the thesis deadline. Decision (agreed with supervisor): ship with the
+known bug for the thesis, apply the fix and retrain afterward. **If you notice this "bug" again, don't
+silently re-fix it — it's a known, intentional, temporary state, not an oversight.** The fix itself is
+cheap when it's time to apply it: only the pooler+classifier head is trainable, the backbone stays frozen
+either way.
+
+### Fixed this session, still applied
+1. **Video-based tubelet-shuffle experiment scrambled padding-tubelet position, not just real-content
    order** (`eval_model_video_based.py`, `CustomVideoDataset.__getitem__`, the `shuffle_frames` branch).
    `torch.randperm(tubelets)` permuted *all* tubelets including padding ones, which are always contiguous
    at the start otherwise (both in training and in the "ordered" eval). Since the V-JEPA2 backbone itself
@@ -289,21 +364,33 @@ A from-scratch, deliberately minimal replacement for the "Prediction Error vs. V
    moving padding out of its familiar position matter" — a confound that scales with how much padding a
    clip has, i.e. with duration. Fixed to only permute the tubelets flagged real by the mask, leaving
    padding tubelets fixed in place (mirrors the existing real/padding distinction already used in
-   `apply_frame_drop_2`, `data_augmentation.py`).
-3. **`evaluation_plots.ipynb`'s `low_dynamicity_filter` silently applied to the shuffle-gap analysis**
+   `apply_frame_drop_2`, `data_augmentation.py`). Unlike the cross-attention-mask bug above, this one is
+   inference-only (no retraining implication) and was **not** reverted.
+2. **`evaluation_plots.ipynb`'s `low_dynamicity_filter` silently applied to the shuffle-gap analysis**
    (Experiment 3), not just the plots it was meant for (Experiments 1/2). The headline "MSE gap
    (shuffled − ordered)" plot was built from the `test_df` filtered earlier in the notebook, while a later
    diagnostic section reloaded an unfiltered `test_df_full` — two different populations compared as if
    they were the same. Not touched in the old notebook; avoided in `evaluation_plots_clean.ipynb` by never
    introducing a shared mutable filter flag in the first place.
+3. **`videomae_l` was registered but unreachable** (`videoBased_encoders.py`, `get_encoder`).
+   `model_registry` has an entry for it and `main()`'s argparse lists it as a valid `--encoder` choice, but
+   the `elif model_name == 'videomae_b':` branch was the only VideoMAE-v1 loading path — selecting
+   `videomae_l` would fall through to `else: raise NotImplementedError`. Fixed by widening the condition to
+   `elif model_name in ('videomae_b', 'videomae_l'):` — safe because that branch already reads
+   `hidden_size` dynamically from the loaded model rather than hardcoding it, and `patch_size`/`tubelet_size`
+   are architectural constants shared by both VideoMAE v1 sizes.
+4. **VideoMAE/X3D were restricted to clips ≤1 segment long** (~4s), discarding most of the dataset — see
+   "Multi-segment models" in Architecture above. Not a "bug" in the traditional sense but a real, fixed
+   limitation; VideoMAE confirmed working post-fix, X3D implemented but not yet run.
 
 ### Flagged, not fixed
 - `eval_model_frame_based.py`/`eval_model_video_based.py` duplicate ~300 lines of class/function
   definitions from `frameBased_encoders.py`/`videoBased_encoders.py` instead of importing them (see
-  "Architecture" above) — this is what made bug #1 need four separate edits, and directly caused a real
-  debugging detour: a "DINOv2 shuffled" CSV generated with the patched pooler code was compared against an
-  "ordered" baseline CSV generated by the pre-patch code, producing a large, duration-dependent-looking
-  effect that was actually just the two files being out of sync, not a real shuffle effect.
+  "Architecture" above) — this is what made the cross-attention-mask bug need four separate edits (and
+  reverts), and directly caused a real debugging detour earlier: a "DINOv2 shuffled" CSV generated with the
+  patched pooler code was compared against an "ordered" baseline CSV generated by the pre-patch code,
+  producing a large, duration-dependent-looking effect that was actually just the two files being out of
+  sync, not a real shuffle effect.
 - `train_ddp`'s per-epoch validation loop doesn't call `model.eval()` (only `torch.no_grad()`), so
   per-epoch validation MSE includes active dropout noise. Final test-set evaluation is unaffected (it does
   call `.eval()`).

@@ -182,7 +182,13 @@ def get_encoder(model_name):
         grid = 224 // encoder_config["patch_size"]
         encoder_config["num_patches"] = grid * grid + encoder_config["added_tokens"]
 
-    elif model_name == 'videomae_b':
+    elif model_name in ('videomae_b', 'videomae_l'):
+        # patch_size/tubelet_size are architectural constants shared by both VideoMAE
+        # v1 variants; hidden_size is read dynamically from the loaded model below, so
+        # this branch needs no other change to cover 'videomae_l' (MCG-NJU/videomae-large)
+        # -- it was previously only reachable for 'videomae_b', despite being registered
+        # in model_registry and listed as a valid --encoder choice (NotImplementedError
+        # at the bottom of this function would have fired for videomae_l before this fix).
         processor = VideoMAEImageProcessor.from_pretrained(model_ID)
         model = VideoMAEModel.from_pretrained(model_ID)
 
@@ -301,7 +307,7 @@ class VJEPA2AttentivePoolerMasked(nn.Module):
         for layer in self.self_attention_layers:
             hidden_state = layer(hidden_state, attention_mask=attention_mask)[0]
         queries = self.query_tokens.repeat(hidden_state.shape[0], 1, 1)
-        hidden_state = self.cross_attention_layer(queries, hidden_state, attention_mask=attention_mask)[0]
+        hidden_state = self.cross_attention_layer(queries, hidden_state)[0]
         return hidden_state.squeeze(1)
 
 class VideoEncoder_ForHumanSensoryHistoryReports(VJEPA2PreTrainedModel):
@@ -370,19 +376,36 @@ class VideoEncoder_ForHumanSensoryHistoryReports(VJEPA2PreTrainedModel):
             # tensor [B, L, C] directly (no HF-style output object, no CLS)
             last_hidden_states = self.encoder(pixel_values_videos)
         elif self.model_name.startswith('x3d'):
-            # X3DFeatureExtractor.forward handles permute, blocks, and reshape internally
-            x = self.encoder(pixel_values_videos)  # → [B, T'*H'*W', C]
-            B, N, C = x.shape
-            
-            # Recover T', H', W' for mask expansion
-            spatial = self.encoder_config["feature_map_size"]
-            T = N // (spatial * spatial)
-            H = W = spatial
+            # X3D is a 3D CNN whose spatial stages (and hidden_size) are tied to a
+            # specific input resolution/frame count per variant (13 frames for
+            # x3d_s, 16 for x3d_m/x3d_l) -- same hard per-call frame limit as
+            # VideoMAE above, covered the same way: `max_segments` frames_per_clip
+            # -sized segments, each encoded independently, concatenated into one
+            # long token sequence per video before pooling.
+            #
+            # X3DFeatureExtractor.forward handles permute, blocks, and reshape
+            # internally, returning [total_segments, T'*H'*W', C] for a
+            # (batch_size * max_segments, T, C, H, W) input -- same contiguous
+            # per-video-segment layout as the videomae branch above.
+            max_segments = self.encoder_config["max_segments"]
+            total_segments = pixel_values_videos.shape[0]
+            batch_size = total_segments // max_segments
 
-            context_masks = context_masks.unsqueeze(-1)  
+            x = self.encoder(pixel_values_videos)  # (batch*max_segments, T'*H'*W', C)
+            total, N, C = x.shape
+
+            # Recover T' for mask expansion (mask is built per-frame in
+            # CustomVideoDataset, shape (batch*max_segments, frames_per_clip); X3D's
+            # tubelet_size=1 means T' == frames_per_clip, so N == T' * spatial**2).
+            spatial = self.encoder_config["feature_map_size"]
+
+            context_masks = context_masks.unsqueeze(-1)
             context_masks = context_masks.expand(-1, -1, spatial * spatial)
-            context_masks = context_masks.reshape(B, N)
-                
+            context_masks = context_masks.reshape(total, N)  # (batch*max_segments, N)
+
+            x = x.reshape(batch_size, max_segments * N, C)
+            context_masks = context_masks.reshape(batch_size, max_segments * N)
+
             last_hidden_states = x
 
         pooler_output = self.pooler(last_hidden_states, attention_mask=context_masks)
@@ -717,14 +740,22 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
 
         train_df = pd.concat([train_df, additional_trials], ignore_index=True)
 
-    # VideoMAE has a hard 16-frame-per-call limit (fixed-length learned position
-    # embeddings, unlike vjepa2's RoPE), so it covers longer clips via multiple
-    # 16-frame segments concatenated before pooling (see CustomVideoDataset /
-    # VideoEncoder_ForHumanSensoryHistoryReports.forward) instead of one big
-    # frames_per_clip like vjepa2. max_segments_per_video=4 (4 x 16 = 64 frames
-    # @ 4fps ~= 16s) covers the same ~15s duration cap the other full-clip models
-    # use, instead of restricting training to <=4s videos.
-    max_segments_per_video = 4 if model_name.startswith("videomae") else 1
+    # VideoMAE and X3D both have a hard per-call frame limit (VideoMAE: fixed-length
+    # learned position embeddings, unlike vjepa2's RoPE; X3D: a 3D CNN whose spatial
+    # stages/hidden_size are tied to a specific input size per variant -- 13 frames
+    # for x3d_s, 16 for x3d_m/x3d_l). Both cover longer clips via multiple
+    # frames-per-clip-sized segments concatenated before pooling (see
+    # CustomVideoDataset / VideoEncoder_ForHumanSensoryHistoryReports.forward)
+    # instead of one big frames_per_clip like vjepa2. max_segments_per_video =
+    # ceil(60 / frames) covers the same ~15s duration cap the other full-clip
+    # models use (60 frames @ 4fps, e.g. vjepa2's frames_per_clip=60), regardless
+    # of this model's own per-segment frame budget -- instead of restricting
+    # training to clips no longer than one segment (e.g. <=4s for a 16-frame
+    # segment at 4fps).
+    if model_name.startswith("videomae") or model_name.startswith("x3d"):
+        max_segments_per_video = math.ceil(60 / frames)
+    else:
+        max_segments_per_video = 1
 
     # Only include videos that fit within the total frame budget across all
     # segments (frames_per_clip * max_segments_per_video), to avoid an
@@ -1195,8 +1226,11 @@ def eval_ddp(rank, world_size, model_name, result_dir, experiment_id, frames, da
     seq_labels = seq_df[categories].values
 
     num_workers = 4  # 4  # 4#2  # Reduced for stability
-    # See train_ddp for why videomae needs multiple 16-frame segments per video.
-    max_segments_per_video = 4 if model_name.startswith("videomae") else 1
+    # See train_ddp for why videomae/x3d need multiple frames_per_clip-sized segments per video.
+    if model_name.startswith("videomae") or model_name.startswith("x3d"):
+        max_segments_per_video = math.ceil(60 / frames)
+    else:
+        max_segments_per_video = 1
     prefetch_factor = 2  # 4qq
     sampling = 30 // fps  # videos were encoded at 30fps, we're sampling at 5Hz, thus every 200ms
     frames_per_clip = frames  # 40#2#config.frames_per_clip  # this is 64, thus 12.8s (64 x 0.2s) maximum video duration.
