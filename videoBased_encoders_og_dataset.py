@@ -711,8 +711,8 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
 
     # Load data
     train_df = pd.read_csv(dataset_root_path / "train_humanReports_rebalanced_v0.csv")
-    val_df = pd.read_csv(dataset_root_path / "val_humanReports_rebalanced_v0.csv.csv")
-    test_df = pd.read_csv(dataset_root_path / "test_humanReports_rebalanced_v0.csv.csv")
+    val_df = pd.read_csv(dataset_root_path / "val_humanReports_rebalanced_v0.csv")
+    test_df = pd.read_csv(dataset_root_path / "test_humanReports_rebalanced_v0.csv")
 
     if upsample_rare_categories:
         print('Upsampling rare categories')
