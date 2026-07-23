@@ -889,9 +889,9 @@ def train_ddp(rank, world_size, model_name, result_dir, experiment_id, frames,
     label2id = {label: i for i, label in enumerate(categories)}
 
     # Load data
-    train_df = pd.read_csv(dataset_root_path / "train_humanReports_rebalanced.csv")
-    val_df = pd.read_csv(dataset_root_path / "val_humanReports_rebalanced.csv")
-    test_df = pd.read_csv(dataset_root_path / "test_humanReports_rebalanced.csv")
+    train_df = pd.read_csv(dataset_root_path / "train_humanReports_rebalanced_v0.csv")
+    val_df = pd.read_csv(dataset_root_path / "val_humanReports_rebalanced_v0.csv")
+    test_df = pd.read_csv(dataset_root_path / "test_humanReports_rebalanced_v0.csv")
 
     # vis_df = pd.read_csv(dataset_root_path / "visualization_humanReports.csv")
     # bench_df = pd.read_csv(dataset_root_path / "benchmarks_humanReports.csv")
@@ -1606,10 +1606,10 @@ def main():
     no_augmentations = True if approach == "vanilla_model" else False
 
     if base_dir.startswith('/braintree'):
-        result_dir = f'/braintree/home/aicha/tests/{model_name}_{approach}'
+        result_dir = f'/braintree/home/aicha/tests/{model_name}_{approach}_og_dataset'
     else:
         #result_dir = f'{base_dir}/{model_name}_{approach}'
-        result_dir = f'/orcd/data/dicarlo/001/om/lynnka/{model_name}_{approach}_aicha'
+        result_dir = f'/orcd/data/dicarlo/001/om/lynnka/{model_name}_{approach}_og_dataset'
     if not os.path.exists(result_dir):
         os.makedirs(result_dir, exist_ok=True)
 

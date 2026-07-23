@@ -1538,9 +1538,9 @@ def main():
                         # the videomamba_m16_k400_mask_ft_f16_res224.pth checkpoint
 
     if base_dir.startswith('/braintree'):
-        result_dir = f'/braintree/home/aicha/tests/{model_name}_{approach}'
+        result_dir = f'/braintree/home/aicha/tests/{model_name}_{approach}_og_dataset'
     else:
-        result_dir = f'/orcd/data/dicarlo/001/om/lynnka/{model_name}_{approach}'
+        result_dir = f'/orcd/data/dicarlo/001/om/lynnka/{model_name}_{approach}_og_dataset'
     if not os.path.exists(result_dir):
         os.makedirs(result_dir, exist_ok=True)
 
