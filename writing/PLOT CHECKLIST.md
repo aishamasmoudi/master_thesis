@@ -5,6 +5,21 @@ one line per slide that needs one. Check off what you already have; anything unc
 before the talk. Diagrams that don't need data (architecture box diagrams, the "Where We Are" status
 slide) are built directly in the .pptx and aren't listed here.
 
+## PLOTS I NEED TO RUN MODELS FOR
+- [ ] MSE: DINOv2 and V-JEPA2 on original dataset (60 frames, 15 epochs, 4 fps), evaluated on original test set
+- [ ] MSE: original models vs. enriched-trained model (60 frames, 15 epochs, 4 fps), evaluated on enriched test set 
+- [ ] MSE: original models vs. enriched-trained model (60 frames, 15 epochs, 4 fps), evaluated on original test set 
+- [ ] MSE: same comparison, enriched training set subsampled to match original size (confound control -> remove ~2000 videos)
+- [ ] MSE — DINOv2-small, with vs. without an added positional embedding in the pooler
+- [ ] Benchmarks
+- [ ] Everything DBSCAN-related (because of wrong cluster threshold)
+
+## TO TRAIN
+- [ ] DINOv2 on original dataset (60 frames, 15 epochs, 4 fps)
+- [ ] V-JEPA2 on original dataset (60 frames, 15 epochs, 4 fps) 
+
+
+
 ---
 
 ## Context
@@ -18,7 +33,7 @@ Dynamicity Metric", "Sanity Checks", "Hyperparameter Optimization", "Hyperparame
 Results", "Method Validation", "Selection of Cluster-Count Threshold...")
 
 - [ ] Show examples of dynamic and low-dynamic videos — slide "What is a dynamic video?"
-- [ ] Sanity-check plot: cluster count vs. truncation duration, for the 3 test videos (should be
+- [ ] **optional** Sanity-check plot: cluster count vs. truncation duration, for the 3 test videos (should be
       non-decreasing) — slide "Sanity Checks"
 - [ ] ROC-AUC for choice of parameters — slide "Hyperparameter Optimization: Results"
 - [ ] Violin plot for choice of parameters — slide "Hyperparameter Optimization: Results"
@@ -55,10 +70,14 @@ Results", "Method Validation", "Selection of Cluster-Count Threshold...")
 
 **3.1 — Prediction error vs. video duration** (slide "Does the Model Use Sensory History?")
 
-- [ ] MSE vs. duration — DINOv2 & V-JEPA2, each under full-clip / shuffled / last-frame, plus human
-      last-frame baseline and split-half noise floor
+- [ ] MSE vs. duration, main test set — DINOv2 & V-JEPA2, each under full-clip / shuffled / last-frame, plus
+      human last-frame baseline and split-half noise floor
       *(already built: `evaluation_plots_clean.ipynb`, "Plot" cell after the main bootstrap — re-run with
       current CSVs before using)*
+- [ ] **(new)** Same MSE-vs-duration plot, on the SensoryHistory benchmark (same fixed set of target videos,
+      each truncated to 0.25/0.5/1.0/2.0/4.0s) — the video-identity-controlled companion to the plot above,
+      added to `PROJECT STORY.md` Part 2 Experiment 1 to address the duration/video-identity confound in the
+      main test set *(not yet run — needs benchmark inference on the SensoryHistory condition)*
 
 **3.2 — Low-dynamicity restriction** (slide "Controlling for Coverage Loss")
 

@@ -15,6 +15,20 @@ Legend used throughout: **[HAVE]** = data/plot already exists · **[PENDING]** =
 
 - Motivation: dynamic object perception — how the brain continuously updates object representations
   as a scene evolves. Computational models let us test this at scale with falsifiable predictions.
+- Two explicit research questions (**[HAVE]**, slide "Dynamic Object Perception"): RQ1 — can we learn a
+  spatiotemporal transformation from large-scale human behavioral data, using pretrained image- and
+  video-based encoders? RQ2 — through controlled manipulations of a trained model's input (duration, frame
+  order, curated clips), what temporal information does it actually rely on, and what does that suggest
+  about the mechanisms of human dynamic perception? (RQ2 was deliberately reworded away from "ablation of
+  architectural components" — that work hasn't been done; what's actually been done is probing a trained
+  model's behavior via input manipulations.)
+- New slide, "Grounded in Prior Work" (**[HAVE]**): three one-line pillars from the literature review built
+  around the 11 papers your supervisor gave you — (1) ANN-behavior alignment is a validated methodology
+  (Majaj et al., 2015; Rajalingham et al., 2018), (2) human dynamic vision depends on integrating across
+  time, not single snapshots (Sörensen et al., 2023; Hénaff et al., 2019; Sulewski et al., 2025), (3)
+  self-supervised video models are a candidate mechanism for this (Assran et al., 2025; Garrido et al.,
+  2025; Nayebi et al., 2023). Full review with all 11 citations lives in `PROJECT STORY.md`'s Background
+  section — this slide is the condensed version.
 - The task: ~12,000 short egocentric clips (Ego4D-derived, 0.1–15s), each with human reports of which
   of 12 object categories (Cup, Knife, Chair, Person, Car, Bike, Dog, Cat, Table, Book, Plant, Bed) were
   perceived. Soft labels in [0,1] = fraction of raters who reported each category.
@@ -170,14 +184,29 @@ about the comparison beyond "here are some numbers" — it's the model-selection
 ## Part 3 — Subsequent analyses: what does the model actually use?
 
 This is your most developed, most interesting section — treat it as the intellectual core of the talk.
-Frame it explicitly as **Hypothesis 1: does the model use temporal/sensory history at all**, matching your
-own H1/H2/H3 structure in PART 2.docx (only H1 has been run — H2 "motion as attention cue" and H3 "object
-permanence" are designed but not executed; mention them as "designed, next" if you want to show the full
-arc of the hypothesis-testing framework, but don't claim results for them). Both models used throughout
-this section are the winners from Part 2's benchmarking (DINOv2 as best frame-based, V-JEPA2 as best
-video-based).
+Both models used throughout this section are the winners from Part 2's benchmarking (DINOv2 as best
+frame-based, V-JEPA2 as best video-based).
 
-### 3.1 Experiment 1 — Prediction error vs. video duration **[HAVE]**
+### 3.0a Setting the stage — "Humans Already Use Sensory History" **[HAVE]**
+
+New slide, inserted right after the Part 3 outline recap. States, as an established fact rather than a
+hypothesis, that human report rates already depend on accumulated clip content: the human last-frame
+baseline diverges further from the full-clip ground truth as duration grows. This isn't something Part 3
+tests — it's the standalone behavioral fact that motivates the rest of the section. Given that humans do
+this, the question for the rest of Part 3 is whether, and through which mechanism, the trained models do
+the same.
+
+### 3.0b Possible Hypotheses **[HAVE]**
+
+New slide, directly after 3.0a. States H1/H2/H3 from PART 2.docx explicitly, each tagged with which
+experiment tests it: H1 — no real temporal integration (tested by Experiments 1–3, i.e. everything below);
+H2 — motion as an attention/segmentation cue, not identity (tested by reverse playback / motion masking,
+designed but not run — see 3.7); H3 — object permanence via temporal integration (tested by the
+ObjectPermanence benchmark, see 3.5). Only H1 has been run so far — H2 and H3 are "designed, next"
+(mention them here as the full arc of the hypothesis-testing framework, but don't claim results for them
+yet).
+
+### 3.1 Experiment 1 — Prediction error vs. video duration **[HAVE, partial]**
 
 - Plot: MSE vs. human full-clip reports, for DINOv2 and V-JEPA2 each under 3 conditions (full clip solid,
   shuffled dotted, last-frame dashed), plus human last-frame baseline and the split-half noise floor,
@@ -188,6 +217,13 @@ video-based).
   summary of a longer clip, for humans and models alike.
 - Finding: the shuffled curves track the ordered curves closely for both models, across the full duration
   range — shuffling frame order barely moves either model's error relative to its own ordered baseline.
+- **Confound**: the main test set entangles video identity with duration — different clips populate each
+  duration bin, so a duration-dependent trend could partly reflect *which* clips happen to be long vs.
+  short, not duration itself.
+- **[PENDING]** Controlled companion, second plot placeholder added to this slide: repeat the same analysis
+  on the SensoryHistory benchmark set — a fixed pool of target videos, each truncated to the same 5
+  durations (0.25/0.5/1.0/2.0/4.0s), so every duration bin contains the *same* underlying clips. Isolates
+  the duration effect from the video-identity confound above. Needs benchmark inference to be run.
 
 ### 3.2 Experiment 2 — Same, restricted to low-dynamicity videos (0-2 clusters) **[HAVE]**
 
