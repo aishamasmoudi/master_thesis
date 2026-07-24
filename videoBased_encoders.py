@@ -40,13 +40,13 @@ from transformers import VideoMAEImageProcessor, VideoMAEModel
 from transformers import TimesformerModel
 
 import sys, os
-VIDEOMAMBA_MODELS_DIR = os.path.expanduser(
-    "~/Ego4D/model_optimization/VideoMamba/videomamba/video_sm/models"
-)
-if VIDEOMAMBA_MODELS_DIR not in sys.path:
-    sys.path.insert(0, VIDEOMAMBA_MODELS_DIR)
+#VIDEOMAMBA_MODELS_DIR = os.path.expanduser(
+#    "~/Ego4D/model_optimization/VideoMamba/videomamba/video_sm/models"
+#)
+#if VIDEOMAMBA_MODELS_DIR not in sys.path:
+#    sys.path.insert(0, VIDEOMAMBA_MODELS_DIR)
 
-from VideoMamba.videomamba.video_sm.models.videomamba import videomamba_middle
+#from VideoMamba.videomamba.video_sm.models.videomamba import videomamba_middle
 
 from data_augmentation import apply_frame_drop_2
 
@@ -336,12 +336,6 @@ class VideoEncoder_ForHumanSensoryHistoryReports(VJEPA2PreTrainedModel):
             output_attentions: Optional[bool] = False,
             output_hidden_states: Optional[bool] = False,
     ) -> Union[tuple, ImageClassifierOutput]:
-        """
-        labels (`torch.LongTensor` of shape `(batch_size,)`, *optional*):
-            Labels for computing the image classification/regression loss. Indices should be in `[0, ...,
-            config.num_labels - 1]`. If `config.num_labels == 1` a regression loss is computed (Mean-Square loss), If
-            `config.num_labels > 1` a classification loss is computed (Cross-Entropy).
-        """
 
         if self.model_name == "vjepa2":
             outputs = self.encoder(pixel_values_videos=pixel_values_videos, output_hidden_states=True)
