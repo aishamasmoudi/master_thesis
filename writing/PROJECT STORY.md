@@ -27,8 +27,8 @@ Specifically, we investigate:
 
 **ANN-behavior alignment as a validated methodology.** Comparing model predictions to human/primate behavior
 is an established way to test mechanistic hypotheses about the ventral visual stream. Simple, learned linear
-readouts of inferior-temporal (IT) population activity accurately predict human object-recognition behavior
-across a wide range of recognition tasks (Majaj, Hong, Solomon & DiCarlo, 2015), and this "compare model
+readouts of *monkey* inferior-temporal (IT) population activity accurately predict *human* object-recognition
+behavior across a wide range of recognition tasks (Majaj, Hong, Solomon & DiCarlo, 2015), and this "compare model
 predictions to large-scale human/primate behavioral data" paradigm has become the standard for evaluating
 whether an ANN is a good model of biological vision. But it also has a known limit: even state-of-the-art
 deep convolutional networks, while capturing coarse *object-level* confusion patterns, fail to predict
