@@ -15,7 +15,7 @@ slide) are built directly in the .pptx and aren't listed here.
 - [ ] Everything DBSCAN-related (because of wrong cluster threshold)
 
 ## TO TRAIN
-- [ ] DINOv2 on original dataset (60 frames, 15 epochs, 4 fps)
+- [x] DINOv2 on original dataset (60 frames, 15 epochs, 4 fps)
 - [ ] V-JEPA2 on original dataset (60 frames, 15 epochs, 4 fps) 
 
 
